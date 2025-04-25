@@ -223,4 +223,4 @@ if __name__ == "__main__":
     
     env = GraphExplorationEnv(G, 9) # Cria o ambiente com o grafo carregado e 9 ações possíveis (número máximo de vizinhos de um nó)
 
-    run_q(1000, env, 0.9, 0.9, 0.1, is_training=True) # Executa run_q(...) com 1000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.1).
+    run_q(10, env, 0.9, 0.9, 0.1, is_training=True) # Executa run_q(...) com 1000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.1).

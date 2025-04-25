@@ -2,6 +2,7 @@ import os
 import pandas as pd # leitura e manipulação dos dados, especialmente o .parquet.
 import pickle # salvar objetos Python em arquivos binários (tipo dicionários).
 import re # regex, pra identificar nomes de pastas com datas (YYYY-MM-DD).
+import pyarrow.parquet as pq
 
 """
 Esse código tem como objetivo processar arquivos .parquet de viagens de ônibus, calcular o tempo médio entre paradas (stop_id -> stop_id) 
@@ -17,7 +18,8 @@ def process_date_folder(date_str: str) -> dict: # Recebe uma string de data no f
         print(f"File not found for date: {file_path}")
         return None
     
-    df = pd.read_parquet(file_path) # Lê o .parquet com pandas 
+    # df = pd.read_parquet(file_path) # Lê o .parquet com pandas
+    df  = pq.read_table(file_path)
     time_per_stop = {}  # array where [total time, number of trips]
     
     print(f"Processing {date_str}...")
@@ -49,17 +51,23 @@ def process_date_folder(date_str: str) -> dict: # Recebe uma string de data no f
 
 # Lista todas as pastas em ./sunt/ que representam datas no formato YYYY-MM-DD
 base_path = "./sunt"
+# print(f"\n📁 Verificando pastas em: {os.path.abspath(base_path)}")
+# print("📂 Conteúdo da pasta sunt:", os.listdir(base_path) if os.path.exists(base_path) else "❌ Pasta não encontrada!")
+
 date_folders = [f for f in os.listdir(base_path) 
-                if os.path.isdir(os.path.join(base_path, f)) 
-                and re.match(r'\d{4}-\d{2}-\d{2}', f)
+                if os.path.isdir(os.path.join(base_path, f)) # Verifica se é uma pasta
+                and re.match(r'\d{4}-\d{2}-\d{2}', f) # Verifica se o nome da pasta está no formato YYYY-MM-DD
                 ]
 date_folders.sort()
+
+# print("📆 Pastas identificadas como datas:", date_folders)
 
 # Process all dates and combine results
 combined_averages = {}
 
 
 for index, date_folder in enumerate(date_folders): # Itera por cada pasta de data, processando o .parquet associado
+    print("Ta enterando ???")
     print(f"{index}/{len(date_folders)}")
     result = process_date_folder(date_folder) # Chama a função process_date_folder para processar os dados
 
