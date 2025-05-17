@@ -96,8 +96,8 @@ class DefaultReward(RewardBaseClass):
 
     def getReward(self, state, previousState, action, target, graph):
 
-        totalTime = self.waitTimeDict[(previousState, state)][0]
-        amount = self.waitTimeDict[(previousState, state)][1]
+        totalTime = self.waitTimeDict[(previousState, state)][0] # tempo total entre os dois nós
+        amount = self.waitTimeDict[(previousState, state)][1] # quantidade de viagens entre os dois nós
 
         reward = -totalTime / amount # A recompensa padrão é negativa: -totalTime / amount, incentivando caminhos com menor tempo médio
 

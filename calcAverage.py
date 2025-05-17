@@ -18,8 +18,8 @@ def process_date_folder(date_str: str) -> dict: # Recebe uma string de data no f
         print(f"File not found for date: {file_path}")
         return None
     
-    # df = pd.read_parquet(file_path) # Lê o .parquet com pandas
-    df  = pq.read_table(file_path)
+    df = pd.read_parquet(file_path) # Lê o .parquet com pandas
+    # df  = pq.read_table(file_path)
     time_per_stop = {}  # array where [total time, number of trips]
     
     print(f"Processing {date_str}...")
