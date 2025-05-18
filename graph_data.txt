@@ -1,0 +1,9 @@
+estado_inicial: A
+estado_final: G
+A B 1
+A C 1
+B D 1
+C D 1
+D E 1
+E F 1
+F G 1

@@ -43,6 +43,8 @@ class GraphExplorationEnv(gym.Env):
         super().reset(seed=seed)
         self.initial = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
         self.state = self.initial
+        
+        self.target = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)] # Garante que o nó inicial e o nó alvo sejam diferentes
         list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
 
 
@@ -96,10 +98,8 @@ class DefaultReward(RewardBaseClass):
 
     def getReward(self, state, previousState, action, target, graph):
 
-        totalTime = self.waitTimeDict[(previousState, state)][0] # tempo total entre os dois nós
-        amount = self.waitTimeDict[(previousState, state)][1] # quantidade de viagens entre os dois nós
 
-        reward = -totalTime / amount # A recompensa padrão é negativa: -totalTime / amount, incentivando caminhos com menor tempo médio
+        reward = 0 # A recompensa padrão é negativa: -totalTime / amount, incentivando caminhos com menor tempo médio
 
         if state == target: # Se o agente chega no destino, dá um bônus gigante: +10.000.000
             reward += 10000000
@@ -144,6 +144,11 @@ if __name__ == "__main__":
                 terminated = False # Terminated marca se o episódio terminou (atingiu o alvo)
 
                 while(not terminated): # Enquanto o episódio não terminar seguir
+
+                    neighbors = list(env.network.neighbors(state[0]))
+                    if not neighbors:  # Se não houver vizinhos, termina o episódio
+                        terminated = True
+                        continue
 
                     if state not in q: # Se esse estado (posição atual + alvo) ainda não está na Q-table, criamos entradas para ele
                         q[state] = {}
@@ -202,6 +207,7 @@ if __name__ == "__main__":
         finally:
             # Calcula a média móvel dos passos por episódio (últimos 100 episódios)
             # Plota esse gráfico e salva
+            print("np.zeros(i): ", np.zeros(i))
             sumSteps = np.zeros(i)
             for t in range(i):
                 sumSteps[t] = np.mean(stepsPerEpisode[max(0, t-100):(t+1)]) 
@@ -223,4 +229,6 @@ if __name__ == "__main__":
     
     env = GraphExplorationEnv(G, 9) # Cria o ambiente com o grafo carregado e 9 ações possíveis (número máximo de vizinhos de um nó)
 
-    run_q(10, env, 0.9, 0.9, 0.1, is_training=True) # Executa run_q(...) com 1000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.1).
+    run_q(100, env, 0.9, 0.9, 0.1, is_training=True) # Executa run_q(...) com 1000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.1).
+
+    #run_q(1, env, alpha=0.9, gamma=0.9, epsilon=0.0, is_training=False) # Teste da política aprendida
