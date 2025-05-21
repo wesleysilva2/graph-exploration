@@ -36,9 +36,18 @@ class GraphExplorationEnv(gym.Env):
         self.observation_space = gym.spaces.Box(low=0, high=np.array([self.network.number_of_nodes() - 1 , self.network.number_of_nodes() - 1]), shape=(2,), dtype=np.int64)
 
         self.count = 0
+
+        # Um delay dinamico em alguns nós, eventos que aumentam o tempo de viagem em certas arestas ao longo do tempo
+        self.dynamicDelays = {} # dicionário que armazena o tempo de espera dinâmico em cada aresta (u, v) do grafo
+
+        # Acumulador de tempo que o agente gastou
+        self.estimated_time_so_far = 0
+
+        # Tempo estimado do trajeto ótimo (útil para comparar e penalizar atrasos)
+        self.max_expected_time = 0
     
     # Reseta o ambiente, escolhendo um nó inicial e um nó alvo aleatórios
-    # Sorteia novo estado inicial e destino
+    # Sorteia novo estado inicial e destino 
     def reset(self,seed=None):
         super().reset(seed=seed)
         self.initial = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
@@ -47,7 +56,21 @@ class GraphExplorationEnv(gym.Env):
         self.target = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)] # Garante que o nó inicial e o nó alvo sejam diferentes
         list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
 
+        self.estimated_time_so_far = 0 # Reinicia o tempo estimado
 
+        self.generate_random_delay() # Geração de atraso simulado em uma aresta aleatória
+        
+        # Calcula o caminho mais curto entre o nó inicial e o nó alvo, considerando o tempo de espera
+        # Dijkstra é usado para encontrar o caminho mais curto entre dois nós em um grafo ponderado
+        try:
+            path = nx.shortest_path(self.network, self.initial, self.target, weight=lambda u, v, d: self.reward.waitTimeDict.get((u,v), (1,1))[0])
+            self.max_expected_time = sum([self.reward.waitTimeDict.get((path[i], path[i+1]), (1, 1))[0] for i in range(len(path)-1)]) # Calcula o tempo estimado do trajeto ótimo
+            print("Caminho ótimo entre o nó inicial e o alvo: ", path)
+            print("Tempo estimado do trajeto ótimo: ", self.max_expected_time)
+        except:
+            print("Nenhum caminho encontrado entre o node inicial e o alvo")
+            self.max_expected_time = 9999 # Se não houver caminho, define um tempo máximo alto
+        
         while(self.state == self.target and self.network.number_of_nodes != 1):
             self.target = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
         
@@ -60,16 +83,27 @@ class GraphExplorationEnv(gym.Env):
     # Realiza um passo no ambiente, movendo-se para um nó vizinho
     def step(self,action):
         self.count += 1
-        
+
         # possibleNextStates: são os vizinhos do estado atual (os possíveis próximos estados)
         possibleNextStates = list(self.network.neighbors(self.state)) 
         previousState = self.state
 
+        # Se o nó atual não tem vizinhos, termina o episódio
         if len(possibleNextStates) != 0: # Atualiza o estado se possível, se houver vizinhos
             self.state = possibleNextStates[action]
 
+        # Antes de mudar de estado, calula-se o tempo real da aresta 
+        edge = (min(previousState, self.state), max(previousState, self.state)) # A aresta é ordenada para evitar duplicação
+        wait_time, _ = self.reward.waitTimeDict.get(edge, (1, 1)) # Tempo base pega o tempo de espera e a quantidade da aresta
+        delay = self.dynamicDelays.get(edge, 0) # Tempo de espera dinâmico (se houver)
+        total_time = wait_time + delay # Tempo total da aresta
+
+        self.estimated_time_so_far += total_time # Acumula o tempo estimado
+
+        print(f"Current state: {self.state}, Target: {self.target}, Estimated time so far: {self.estimated_time_so_far}")
+
         # Usa a rewardClass e stopClass para calcular recompensa e término do episódio
-        reward = self.reward.getReward(self.state, previousState, action, self.target, self.network)
+        reward = self.reward.getReward(self.state, previousState, action, self.target, self.network, self.estimated_time_so_far, self.max_expected_time)
 
         terminated = self.stop.isTerminated(self.state, previousState, action, self.target, self.network)
 
@@ -78,6 +112,16 @@ class GraphExplorationEnv(gym.Env):
         # Retorna: observação, recompensa, se o episódio terminou, se o episódio foi truncado (False), e um dicionário com metadados (count de passos)
         return obs, reward, terminated, False, {"count" : self.count}
 
+    def generate_random_delay(self):
+        # Simula um bloqueio aleatório em uma aresta do grafo
+        edge = list(self.network.edges)
+        if len(edge) == 0:
+            return
+        u, v = random.choice(edge) # Escolhe uma aresta aleatória
+        self.dynamicDelays = {
+            (min(u, v), max(u, v)): 100 # Adiciona um atraso de 100 segundos
+        }
+        
 # Essa é a classe base para as classes de recompensa e parada
 class RewardBaseClass():
     def getReward(self, state, previousState, action, target, graph):
@@ -95,15 +139,26 @@ class DefaultReward(RewardBaseClass):
         with open('./output/combined_sum_amount.pkl', 'rb') as f:
             self.waitTimeDict = pickle.load(f) # waitTimeDict[(u, v)] = (tempo de espera, quantidade)
 
-
-    def getReward(self, state, previousState, action, target, graph):
-
+    # A recompensa é calculada com base no tempo total e na quantidade de viagens
+    def getReward(self, state, previousState, action, target, graph, estimated_time_so_far, max_expected_time):
+        
 
         reward = 0 # A recompensa padrão é negativa: -totalTime / amount, incentivando caminhos com menor tempo médio
 
-        if state == target: # Se o agente chega no destino, dá um bônus gigante: +10.000.000
-            reward += 10000000
+        #if state == target: # Se o agente chega no destino, dá um bônus gigante: +10.000.000
+        #    reward += 10000000
 
+        if state == target:
+            delay_ratio = estimated_time_so_far / max_expected_time if max_expected_time > 0 else 1
+            if delay_ratio <= 1.2:
+                reward += 100
+            elif delay_ratio <= 1.5:
+                reward += 50
+            else:
+                reward -= 100 # Penaliza se o tempo estimado for muito maior que o esperado
+        if reward != 0:
+            print(f"Reward: {reward}, Estimated time so far: {estimated_time_so_far}, Max expected time: {max_expected_time}")
+            print("delay_ratio: ", delay_ratio)
         return reward
 
 # Essa é a classe padrão de parada, que termina o episódio quando o agente chega ao nó alvo   
@@ -124,6 +179,8 @@ if __name__ == "__main__":
         import time
         import matplotlib.pyplot as plt
         startTime = time.time() # Registra o tempo para garantir que a execução não ultrapasse 2 horas
+        max_steps = 5000  # Limite (generico) de passos por episódio, valor pode mudar
+        
         try:
             if(is_training): # Se for treinamento, começamos com Q-table vazia
                 q = {}
@@ -133,17 +190,18 @@ if __name__ == "__main__":
                 f.close()
                 
             stepsPerEpisode = np.zeros(episodes) # Array para guardar quantos passos foram dados em cada episódio
-            stepCount = 0 # contador de passos do episódio atual
+            
         
             for i in range(episodes): # Inicia o laço de episódios de treino/teste
                 
                 # Reinicia o ambiente (env.reset()) e recebe o estado inicial (posição atual + alvo)
+                stepCount = 0 # contador de passos do episódio atual
                 state = env.reset()[0]
                 start = state[0]
                 target = state[1]
                 terminated = False # Terminated marca se o episódio terminou (atingiu o alvo)
 
-                while(not terminated): # Enquanto o episódio não terminar seguir
+                while(not terminated and stepCount < max_steps): # Enquanto o episódio não terminar seguir
 
                     neighbors = list(env.network.neighbors(state[0]))
                     if not neighbors:  # Se não houver vizinhos, termina o episódio
@@ -177,8 +235,11 @@ if __name__ == "__main__":
                     # Atualização da Q-table (apenas se for treino)
                     # Essa é a equação padrão do Q-learning 
                     if is_training:
-                        qValues = [ q[new_state][act] for act in range(len(list(env.network.neighbors(new_state[0])))) ]
 
+                        # A Q-table é atualizada com base na recompensa recebida e no valor máximo da próxima ação
+                        qValues = [q[new_state][act] for act in q[new_state]] if q[new_state] else [0]
+                        # qValues = [ q[new_state][act] for act in range(len(list(env.network.neighbors(new_state[0])))) ]
+                        
                         sample = reward + gamma * (max(qValues) if len(qValues) > 0 else 0)
 
                         part1 = ( (1 - alpha) * q[state][action] ) if len(q[state]) > 0 else float('-inf')
@@ -214,7 +275,8 @@ if __name__ == "__main__":
 
             plt.plot(sumSteps)
             plt.savefig(f'q{env.initial}-{env.target}-{alpha}-{gamma}-{epsilon}.png')
-
+            
+            np.save(f'steps_{env.initial}_{env.target}.npy', stepsPerEpisode) # Salva o número de passos por episódio em um arquivo .npy
             # Se for treinamento, salva a Q-table em um arquivo
             if is_training:
                 # Save Q Table
@@ -229,6 +291,6 @@ if __name__ == "__main__":
     
     env = GraphExplorationEnv(G, 9) # Cria o ambiente com o grafo carregado e 9 ações possíveis (número máximo de vizinhos de um nó)
 
-    run_q(100, env, 0.9, 0.9, 0.1, is_training=True) # Executa run_q(...) com 1000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.1).
+    run_q(5, env, 0.9, 0.9, 0.1, is_training=True) # Executa run_q(...) com 1000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.1).
 
     #run_q(1, env, alpha=0.9, gamma=0.9, epsilon=0.0, is_training=False) # Teste da política aprendida
