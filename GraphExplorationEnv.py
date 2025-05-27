@@ -50,31 +50,40 @@ class GraphExplorationEnv(gym.Env):
     # Sorteia novo estado inicial e destino 
     def reset(self,seed=None):
         super().reset(seed=seed)
-        self.initial = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
-        self.state = self.initial
+        self.initial = random.choice(list(self.network.nodes))
+        self.target = random.choice(list(self.network.nodes))
         
-        self.target = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)] # Garante que o nó inicial e o nó alvo sejam diferentes
-        list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
+        while self.target == self.initial and self.network.number_of_nodes() > 1: # Garante que o nó inicial e o nó alvo sejam diferentes
+            self.target = random.choice(list(self.network.nodes))
 
+        self.state = self.initial # Define o estado inicial como o nó inicial
         self.estimated_time_so_far = 0 # Reinicia o tempo estimado
+        self.count = 0 # Reinicia o contador de passos
 
-        self.generate_random_delay() # Geração de atraso simulado em uma aresta aleatória
+        self.generate_random_delay(self.initial,self.target) # Geração de atraso simulado em uma aresta aleatória
+
+        # Definição de peso da aresta
+        def edge_weight(u, v, d):
+            key = (min(str(u), str(v)), max(str(u), str(v))) # Ordena os nós da aresta para evitar duplicação
+            return self.reward.waitTimeDict.get(key, (1, 1))[0] # Pega o tempo de espera da aresta, se não existir, usa (1, 1) como padrão
         
         # Calcula o caminho mais curto entre o nó inicial e o nó alvo, considerando o tempo de espera
         # Dijkstra é usado para encontrar o caminho mais curto entre dois nós em um grafo ponderado
         try:
-            path = nx.shortest_path(self.network, self.initial, self.target, weight=lambda u, v, d: self.reward.waitTimeDict.get((u,v), (1,1))[0])
-            self.max_expected_time = sum([self.reward.waitTimeDict.get((path[i], path[i+1]), (1, 1))[0] for i in range(len(path)-1)]) # Calcula o tempo estimado do trajeto ótimo
+            path = nx.shortest_path(self.network, self.initial, self.target, weight=edge_weight) # Calcula o caminho mais curto entre o nó inicial e o nó alvo
+            self.max_expected_time = sum( # Soma o tempo de espera de cada aresta no caminho
+                self.reward.waitTimeDict.get((min(str(path[i]), str(path[i+1])), max(str(path[i]), str(path[i+1]))), (1, 1))[0] # Tempo de espera da aresta
+                for i in range(len(path)-1)
+            )
             print("Caminho ótimo entre o nó inicial e o alvo: ", path)
             print("Tempo estimado do trajeto ótimo: ", self.max_expected_time)
-        except:
+        
+        except nx.NetworkXNoPath: # Se não houver caminho entre o nó inicial e o alvo, trata a exceção
             print("Nenhum caminho encontrado entre o node inicial e o alvo")
-            self.max_expected_time = 9999 # Se não houver caminho, define um tempo máximo alto
+            self.max_expected_time = float('inf') # Define o tempo estimado como infinito, pois não há caminho
         
-        while(self.state == self.target and self.network.number_of_nodes != 1):
+        while(self.state == self.target and self.network.number_of_nodes != 1): # Garante que o nó inicial e o nó alvo sejam diferentes
             self.target = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
-        
-        self.count = 0 # Reinicia o contador de passos
 
         obs = (self.state, self.target) # Retorna a observação inicial: uma tupla (estado atual, destino) 
         return obs, {}
@@ -88,39 +97,81 @@ class GraphExplorationEnv(gym.Env):
         possibleNextStates = list(self.network.neighbors(self.state)) 
         previousState = self.state
 
+        if action >= len(possibleNextStates): # Se a ação escolhida for maior que o número de vizinhos, lança um erro
+            raise ValueError(f"Ação {action} inválida. Apenas {len(possibleNextStates)} vizinhos disponíveis.")
+
         # Se o nó atual não tem vizinhos, termina o episódio
         if len(possibleNextStates) != 0: # Atualiza o estado se possível, se houver vizinhos
             self.state = possibleNextStates[action]
 
         # Antes de mudar de estado, calula-se o tempo real da aresta 
-        edge = (min(previousState, self.state), max(previousState, self.state)) # A aresta é ordenada para evitar duplicação
-        wait_time, _ = self.reward.waitTimeDict.get(edge, (1, 1)) # Tempo base pega o tempo de espera e a quantidade da aresta
+        # Aresta é uma tupla (u, v) onde u é o nó anterior e v é o nó atual
+        # Aresta é ordenada para evitar duplicação, (u, v) e (v, u) serem considerados diferentes
+        edge = (min(str(previousState), str(self.state)), max(str(previousState), str(self.state))) # Ordena os nós da aresta para evitar duplicação
+        wait_time, _ = self.reward.waitTimeDict.get(edge, (1, 1)) # Pega o tempo de espera da aresta, se não existir, usa (1, 1) como padrão
         delay = self.dynamicDelays.get(edge, 0) # Tempo de espera dinâmico (se houver)
         total_time = wait_time + delay # Tempo total da aresta
 
         self.estimated_time_so_far += total_time # Acumula o tempo estimado
 
-        print(f"Current state: {self.state}, Target: {self.target}, Estimated time so far: {self.estimated_time_so_far}")
+        print(f"Current state: {self.state}, Target: {self.target}, Estimated time so far: {self.estimated_time_so_far}, Delay: {delay}, Total time: {total_time}")
 
         # Usa a rewardClass e stopClass para calcular recompensa e término do episódio
-        reward = self.reward.getReward(self.state, previousState, action, self.target, self.network, self.estimated_time_so_far, self.max_expected_time)
+        reward = self.reward.getReward(
+            self.state, previousState, action, self.target, self.network, 
+            self.estimated_time_so_far, self.max_expected_time, delay
+        )
 
         terminated = self.stop.isTerminated(self.state, previousState, action, self.target, self.network)
+
+        print("Reward on Step:",reward, "Terminated:",terminated)
 
         obs = (self.state, self.target)
 
         # Retorna: observação, recompensa, se o episódio terminou, se o episódio foi truncado (False), e um dicionário com metadados (count de passos)
         return obs, reward, terminated, False, {"count" : self.count}
 
-    def generate_random_delay(self):
-        # Simula um bloqueio aleatório em uma aresta do grafo
-        edge = list(self.network.edges)
-        if len(edge) == 0:
-            return
-        u, v = random.choice(edge) # Escolhe uma aresta aleatória
-        self.dynamicDelays = {
-            (min(u, v), max(u, v)): 100 # Adiciona um atraso de 100 segundos
-        }
+    def generate_random_delay(self, start, target):
+        try:
+            # Encontra o caminho mais curto entre o start e o target
+            shortest_path = nx.shortest_path(self.network, source=start, target=target, weight='weight')
+            path_edges = list(zip(shortest_path, shortest_path[1:])) # Cria uma lista de arestas do caminho mais curto
+            total_time = 0
+
+            if not path_edges:
+                return  # Sem arestas para atrasar
+
+            # Calcula tempo total das arestas do caminho
+            for a, b in path_edges:
+                a, b = str(a), str(b)
+                edge_key = (min(a, b), max(a, b)) # Ordena os nós da aresta para evitar duplicação
+                if edge_key in self.reward.waitTimeDict:
+                    edge_time = self.reward.waitTimeDict[edge_key][0]
+                    total_time += edge_time # Soma o tempo de espera da aresta
+                else:
+                    print(f"[AVISO] Aresta {edge_key} não está no waitTimeDict!")
+
+            average_time = total_time / len(path_edges)
+            print(f"Média de tempo das arestas do caminho ótimo: {average_time}")
+
+            # Escolhe uma das arestas do caminho para atrasar
+            delay_u, delay_v = random.choice(path_edges)
+            delay_u, delay_v = str(delay_u), str(delay_v) # Ordena os nós da aresta para evitar duplicação
+            delay_edge_key = (min(delay_u, delay_v), max(delay_u, delay_v)) # Aresta escolhida para atraso
+
+            if delay_edge_key in self.reward.waitTimeDict: # Verifica se a aresta escolhida está no waitTimeDict
+                delay = average_time * 5  # Simula congestionamento pesado
+                self.dynamicDelays = {
+                    delay_edge_key: delay # Aresta escolhida para atraso com o tempo de atraso aplicado
+                }
+                print(f"Aresta atrasada: {delay_edge_key}, atraso aplicado: {delay}")
+            else:
+                print(f"[ERRO] Aresta escolhida para atraso {delay_edge_key} não está no waitTimeDict.")
+                self.dynamicDelays = {}
+
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            self.dynamicDelays = {}
+
         
 # Essa é a classe base para as classes de recompensa e parada
 class RewardBaseClass():
@@ -136,29 +187,34 @@ class StopConditionBaseClass():
 class DefaultReward(RewardBaseClass):
     def __init__(self) -> None:
         super().__init__()
-        with open('./output/combined_sum_amount.pkl', 'rb') as f:
+        with open('./output/combined_sum_amount.pkl', 'rb') as f: # Carrega o dicionário de tempos de espera e quantidades de viagens do DataSet
             self.waitTimeDict = pickle.load(f) # waitTimeDict[(u, v)] = (tempo de espera, quantidade)
 
     # A recompensa é calculada com base no tempo total e na quantidade de viagens
-    def getReward(self, state, previousState, action, target, graph, estimated_time_so_far, max_expected_time):
+    def getReward(self, state, previousState, action, target, graph, estimated_time_so_far, max_expected_time, delay):
         
+        totalTime = self.waitTimeDict[(previousState, state)][0]
+        amount = self.waitTimeDict[(previousState, state)][1]
 
-        reward = 0 # A recompensa padrão é negativa: -totalTime / amount, incentivando caminhos com menor tempo médio
+        # reward = 0 # A recompensa padrão é negativa: -totalTime / amount, incentivando caminhos com menor tempo médio
 
-        #if state == target: # Se o agente chega no destino, dá um bônus gigante: +10.000.000
-        #    reward += 10000000
+        # Recompensa negativa pelo tempo gasto
+        # A recompensa é negativa, pois o agente deve minimizar o tempo gasto
+        # Isso casa perfeitamente com algoritmos como Q-learning ou DQN, que maximizam retorno acumulado
+        reward = - (totalTime + delay)
 
+        # Se o agente chega no destino, dá um bônus proporcional ao tempo estimado e ao tempo máximo esperado
         if state == target:
             delay_ratio = estimated_time_so_far / max_expected_time if max_expected_time > 0 else 1
             if delay_ratio <= 1.2:
-                reward += 100
+                reward += 500000 # Grandesa escolhida para ter um impacto significativo na recompensa total
             elif delay_ratio <= 1.5:
-                reward += 50
+                reward += 250000
             else:
-                reward -= 100 # Penaliza se o tempo estimado for muito maior que o esperado
-        if reward != 0:
+                reward -= 500000 # Penaliza se o tempo estimado for muito maior que o esperado
             print(f"Reward: {reward}, Estimated time so far: {estimated_time_so_far}, Max expected time: {max_expected_time}")
             print("delay_ratio: ", delay_ratio)
+        
         return reward
 
 # Essa é a classe padrão de parada, que termina o episódio quando o agente chega ao nó alvo   
@@ -180,7 +236,12 @@ if __name__ == "__main__":
         import matplotlib.pyplot as plt
         startTime = time.time() # Registra o tempo para garantir que a execução não ultrapasse 2 horas
         max_steps = 5000  # Limite (generico) de passos por episódio, valor pode mudar
-        
+
+       #  rewardsPerStep = []  # Array para guardar a recompensa total de cada passo
+
+        rewardsPerEpisode = np.zeros(episodes)
+
+
         try:
             if(is_training): # Se for treinamento, começamos com Q-table vazia
                 q = {}
@@ -190,12 +251,12 @@ if __name__ == "__main__":
                 f.close()
                 
             stepsPerEpisode = np.zeros(episodes) # Array para guardar quantos passos foram dados em cada episódio
-            
         
             for i in range(episodes): # Inicia o laço de episódios de treino/teste
                 
                 # Reinicia o ambiente (env.reset()) e recebe o estado inicial (posição atual + alvo)
                 stepCount = 0 # contador de passos do episódio atual
+                currentEpisodeReward = 0 # Variável para acumular a recompensa do episódio atual
                 state = env.reset()[0]
                 start = state[0]
                 target = state[1]
@@ -225,6 +286,12 @@ if __name__ == "__main__":
                     
                     # Faz o passo no ambiente, recebendo o novo estado, recompensa, se o episódio terminou (chegou ao alvo?), e metadados
                     new_state,reward,terminated,_,extra = env.step(action)
+
+                    currentEpisodeReward += reward # Acumula a recompensa do episódio atual
+
+                    # rewardsPerStep.append(reward) # Acumula a recompensa total de cada passo
+
+                    rewardsPerEpisode[i] = currentEpisodeReward
                     
                     # Mesma lógica que antes — se o novo estado ainda não está na Q-table, criamos entradas
                     if new_state not in q:
@@ -258,6 +325,7 @@ if __name__ == "__main__":
                         stepsPerEpisode[i] = stepCount
                         stepCount = 0
                 
+                # rewardsPerStep[i] = currentEpisodeReward
                 # Reduz o epsilon ao longo dos episódios para explorar menos e explorar mais com o tempo
                 epsilon = max(epsilon - 1/(episodes), 0.01) # Nunca deixa epsilon menor que 0.01 (exploração mínima)
                 if time.time() - startTime > 60 * 60 * 2: # 2 hours
@@ -271,12 +339,28 @@ if __name__ == "__main__":
             print("np.zeros(i): ", np.zeros(i))
             sumSteps = np.zeros(i)
             for t in range(i):
-                sumSteps[t] = np.mean(stepsPerEpisode[max(0, t-100):(t+1)]) 
+                sumSteps[t] = np.mean(stepsPerEpisode[max(0, t-100):(t+1)]) # Média móvel dos passos por episódio
 
-            plt.plot(sumSteps)
+            plt.plot(sumSteps) # Plota a média móvel dos passos por episódio
             plt.savefig(f'q{env.initial}-{env.target}-{alpha}-{gamma}-{epsilon}.png')
+
+            # Plota a RECOMPENSA total por passo
+            #window_size = 100
+            #moving_avg = [np.mean(rewardsPerStep[max(0, i-window_size):i+1]) for i in range(len(rewardsPerStep))] # Média móvel da recompensa total por passo
             
-            np.save(f'steps_{env.initial}_{env.target}.npy', stepsPerEpisode) # Salva o número de passos por episódio em um arquivo .npy
+            # Plota a RECOMPENSA total por episódio (média móvel)
+            window_size = 100
+            moving_avg = [np.mean(rewardsPerEpisode[max(0, i-window_size):i+1]) for i in range(len(rewardsPerEpisode))]
+
+            plt.figure(figsize=(12,6))
+            plt.plot(moving_avg)
+            plt.title("Recompensa por episódio (média móvel)")
+            plt.xlabel("Episódios")
+            plt.ylabel("Recompensa média")
+            plt.grid(True)
+            plt.savefig(f'rewards-smooth-{env.initial}-{env.target}-{alpha}-{gamma}-{epsilon}.png')
+
+            # np.save(f'steps_{env.initial}_{env.target}.npy', stepsPerEpisode) # Salva o número de passos por episódio em um arquivo .npy
             # Se for treinamento, salva a Q-table em um arquivo
             if is_training:
                 # Save Q Table
@@ -291,6 +375,6 @@ if __name__ == "__main__":
     
     env = GraphExplorationEnv(G, 9) # Cria o ambiente com o grafo carregado e 9 ações possíveis (número máximo de vizinhos de um nó)
 
-    run_q(5, env, 0.9, 0.9, 0.1, is_training=True) # Executa run_q(...) com 1000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.1).
+    run_q(30000, env, 0.9, 0.9, 0.2, is_training=True) # Executa run_q(...) com 20000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.2).
 
     #run_q(1, env, alpha=0.9, gamma=0.9, epsilon=0.0, is_training=False) # Teste da política aprendida
