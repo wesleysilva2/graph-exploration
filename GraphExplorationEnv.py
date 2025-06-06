@@ -1,4 +1,5 @@
 import gymnasium as gym
+from gymnasium import spaces
 import pickle
 import networkx as nx
 import numpy as np
@@ -14,7 +15,8 @@ class GraphExplorationEnv(gym.Env):
     # rewardClass: Classe de recompensa personalizada (opcional)
     # initial, target: nós de início e destino (se não passados, são escolhidos aleatoriamente)
     def __init__(self, network: nx.Graph, actions_amout: int, stopClass = None, rewardClass = None, initial = None, target = None):
-        self.network = network 
+        super(GraphExplorationEnv, self).__init__()
+        self.network = network
 
         self.initial = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)] if initial is None else initial
         self.state = self.initial
@@ -33,7 +35,14 @@ class GraphExplorationEnv(gym.Env):
         # O espaço de ação é discreto, com o número de ações igual ao número de vizinhos do nó atual
         # O espaço de observação é um vetor de dois elementos: o nó atual e o nó alvo
         self.action_space = gym.spaces.Discrete(actions_amout)
-        self.observation_space = gym.spaces.Box(low=0, high=np.array([self.network.number_of_nodes() - 1 , self.network.number_of_nodes() - 1]), shape=(2,), dtype=np.int64)
+        # self.observation_space = gym.spaces.Box(low=0, high=np.array([self.network.number_of_nodes() - 1 , self.network.number_of_nodes() - 1]), shape=(2,), dtype=np.int64)
+        
+        self.node_to_idx = {node: idx for idx, node in enumerate(sorted(self.network.nodes()))}
+        self.idx_to_node = {idx: node for node, idx in self.node_to_idx.items()}
+        
+        self.observation_space = spaces.Box(low=0, high=len(self.network.nodes()) - 1, shape=(2,), dtype=np.int64)
+
+
 
         self.count = 0
 
@@ -85,7 +94,12 @@ class GraphExplorationEnv(gym.Env):
         while(self.state == self.target and self.network.number_of_nodes != 1): # Garante que o nó inicial e o nó alvo sejam diferentes
             self.target = list(self.network.nodes)[random.randint(0, self.network.number_of_nodes()-1)]
 
-        obs = (self.state, self.target) # Retorna a observação inicial: uma tupla (estado atual, destino) 
+        # obs = (self.state, self.target) # Retorna a observação inicial: uma tupla (estado atual, destino) 
+        obs = np.array([
+            self.node_to_idx[self.initial],
+            self.node_to_idx[self.target]
+        ], dtype=np.int64)
+
         return obs, {}
     
     
@@ -126,10 +140,16 @@ class GraphExplorationEnv(gym.Env):
 
         print("Reward on Step:",reward, "Terminated:",terminated)
 
-        obs = (self.state, self.target)
+        done = terminated # done é True se o episódio terminou (o agente chegou ao alvo)
+
+        # obs = (self.state, self.target)
+        obs = np.array([
+            self.node_to_idx[self.initial],
+            self.node_to_idx[self.target]
+        ], dtype=np.int64)
 
         # Retorna: observação, recompensa, se o episódio terminou, se o episódio foi truncado (False), e um dicionário com metadados (count de passos)
-        return obs, reward, terminated, False, {"count" : self.count}
+        return obs, reward, done, False, {"count" : self.count}
 
     def generate_random_delay(self, start, target):
         try:
@@ -172,7 +192,12 @@ class GraphExplorationEnv(gym.Env):
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             self.dynamicDelays = {}
 
-        
+    def render(self):
+        pass  
+
+    def close(self):
+        pass
+
 # Essa é a classe base para as classes de recompensa e parada
 class RewardBaseClass():
     def getReward(self, state, previousState, action, target, graph):
@@ -375,6 +400,6 @@ if __name__ == "__main__":
     
     env = GraphExplorationEnv(G, 9) # Cria o ambiente com o grafo carregado e 9 ações possíveis (número máximo de vizinhos de um nó)
 
-    run_q(30000, env, 0.9, 0.9, 0.2, is_training=True) # Executa run_q(...) com 20000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.2).
+    run_q(10, env, 0.9, 0.9, 0.2, is_training=True) # Executa run_q(...) com 20000 episódios e hiperparâmetros definidos (alpha=0.9, gamma=0.9, epsilon=0.2).
 
     #run_q(1, env, alpha=0.9, gamma=0.9, epsilon=0.0, is_training=False) # Teste da política aprendida
